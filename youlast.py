@@ -1,8 +1,8 @@
 #!/usr/bin/env python2
+from __future__ import unicode_literals
 
 # Last.FM API libraries
 import time
-#import pylast
 import urllib2
 import json
 # YouTube API libraries
@@ -18,51 +18,78 @@ DEVELOPER_KEY = "your-api-key"
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
 
-# Replace with your API key and secret from http://www.last.fm/api/account
-API_KEY = "your-api-key"
-API_SECRET = "your-api-secret"
+# Retrieve tracklist from Last.FM station
 
-username = "your_username"
-password_hash = "your_password"
-
-if not "tune" in dir(pylast.LastFMNetwork):
-  print("You need modified pylast library from https://github.com/chusopr/pylast/archive/pylast-stations.zip")
-  exit()
-
-network = pylast.LastFMNetwork(api_key = API_KEY, api_secret =
-    API_SECRET, username = username, password_hash = pylast.md5(password_hash))
-network.tune(network.get_authenticated_user().get_mix_station_url())
-print("Playing " + network.get_station_name())
+lastfm_username = "your_username"
 
 while True:
-  # Retrieve tracklist from Last.FM station
-  for track in network.get_station_tracks():
-    print("Playing " + track.get_artist() + " - " + track.get_title())
+  # Last.fm servers reply with a 500 error quite often, we need to catch it and retry
+  try:
+    response = urllib2.urlopen("http://www.last.fm/player/station/user/" + lastfm_username + "/mix")
+  except urllib2.HTTPError:
+    print("Is Last.fm down? Trying again in 5 seconds...")
+    time.sleep(5)
+    continue
 
-    # Search song in YouTube
+  # Get and decode response
+  json_tracklist = response.read()
+  tracklist = json.loads(json_tracklist)
+
+  # Validate tracklist
+  if not "playlist" in tracklist:
+    print("No playlist received from Last.fm")
+    time.sleep(5)
+    continue
+  if len(tracklist["playlist"]) == 0:
+    print("Empty playlis received from Last.fm")
+    time.sleep(5)
+    continue
+
+  # Iterate over tracks to play them
+  for track in tracklist["playlist"]:
+    # Last.fm returns an array of artist, so we need to be prepared
+    # to parse more songs with more than one artist
+    artist = track["artists"][0]["name"]
+    for i in range(1, len(track["artists"])):
+      artist += ", " + track["artists"][i]["name"]
+
+    # We print song name even before a download link is actually found
+    # so we can know which song had to be played even if no donwload link
+    # was found
+    print("Playing " + artist + " - " + track["name"])
+
     yt_id = None
 
-    youtube = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=DEVELOPER_KEY)
+    # We first check if Last.fm has already provided us with a YouTube link
+    for link in track["playlinks"]:
+      if link["affiliate"] == "youtube":
+        yt_id = link["id"]
 
-    search = youtube.search().list(
-      q = track.get_artist() + " - " + track.get_title(),
-      part = "id",
-      maxResults = 1,
-      videoCategoryId = "sGDdEsjSJ_SnACpEvVQ6MtTzkrI/nqRIq97-xe5XRZTxbknKFVe5Lmg",
-      safeSearch = "none",
-      type = "video",
-      videoLicense = "any",
-      videoEmbeddable = "any"
-    ).execute()
+    # If Last.fm has not provided a donwload link, try to find a video by ourselves
+    if yt_id is None:
+      print("No YouTube link provided, looking for one")
 
-    videos = search["items"]
-    if len(videos) != 1:
-      print("No videos found. Skipping.")
-      continue
-    else:
-      yt_id = search["items"][0]["id"]["videoId"]
+      youtube = build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=DEVELOPER_KEY)
 
-    # Download song
+      search = youtube.search().list(
+        q=track["artists"][0]["name"] + " - " + track["name"],
+        part="id",
+        maxResults=1,
+        # Limit search to Music category
+        videoCategoryId="sGDdEsjSJ_SnACpEvVQ6MtTzkrI/nqRIq97-xe5XRZTxbknKFVe5Lmg",
+        safeSearch="none",
+        type="video",
+        videoLicense="any",
+        videoEmbeddable="any"
+      ).execute()
+
+      videos = search["items"]
+      if len(videos) != 1:
+        print("No videos found. Skipping.")
+        continue
+      else:
+        yt_id = search["items"][0]["id"]["videoId"]
+
     ydl_opts = {
       'format': 'bestaudio',
       'logtostderr': True,
@@ -71,7 +98,6 @@ while True:
     ydl = youtube_dl.YoutubeDL(ydl_opts)
     ydl.download(["https://www.youtube.com/watch?v=" + yt_id])
 
-    # Play donwloaded song
     song = AudioSegment.from_file("/tmp/" + yt_id)
     play(song)
     remove("/tmp/" + yt_id)
