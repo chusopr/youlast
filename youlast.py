@@ -96,7 +96,11 @@ while True:
       'outtmpl': '/tmp/%(id)s',
     }
     ydl = youtube_dl.YoutubeDL(ydl_opts)
-    ydl.download(["https://www.youtube.com/watch?v=" + yt_id])
+    try:
+      ydl.download(["https://www.youtube.com/watch?v=" + yt_id])
+    except youtube_dl.utils.DownloadError:
+      print("Song download failed. Skipping.")
+      continue
 
     song = AudioSegment.from_file("/tmp/" + yt_id)
     play(song)
